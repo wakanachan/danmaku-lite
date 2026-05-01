@@ -1,0 +1,46 @@
+{
+  "name": "danmaku-lite",
+  "version": "0.1.0",
+  "description": "Framework-agnostic, player-agnostic danmaku (bullet chat) rendering engine with dual Canvas/DOM backends",
+  "type": "module",
+  "license": "MIT",
+  "author": "",
+  "keywords": [
+    "danmaku",
+    "danmu",
+    "bullet-chat",
+    "barrage",
+    "canvas",
+    "video",
+    "overlay",
+    "subtitle",
+    "弹幕"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm build && pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.1.0",
+    "jsdom": "^26.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  },
+  "packageManager": "pnpm@10.24.0"
+}

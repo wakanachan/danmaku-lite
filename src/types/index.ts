@@ -1,0 +1,5 @@
+export type { PlayerAdapter } from './player-adapter'
+export { DanmakuMode } from './danmaku-item'
+export type { DanmakuItem } from './danmaku-item'
+export type { DanmakuOptions, EngineType, OverflowStrategy } from './config'
+export type { DanmakuEngine } from './engine'
