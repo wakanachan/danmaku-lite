@@ -2,35 +2,15 @@ import type {DanmakuEngine, DanmakuItem, DanmakuOptions, OverflowStrategy} from 
 import {DanmakuMode} from '../../types'
 import type {ResolvedConfig, VisibleDanmaku} from '../../types/internal'
 import {CanvasRenderer} from './renderer'
-import {TrackManager} from './track-manager'
+import {TrackManager} from '../../core/track-manager'
 import {ObjectPool} from './pool'
 import {BitmapCache} from './bitmap-cache'
 import {RafLoop} from '../../core/raf-loop'
 import {Scheduler} from '../../core/scheduler'
 import {schedulePreCache} from '../../core/pre-cache'
+import {SHARED_DEFAULTS} from '../../core/defaults'
+import {StreamLoader} from '../../core/stream-loader'
 import {clamp} from '../../utils/math'
-
-const DEFAULTS: Omit<ResolvedConfig, never> = {
-  enabled: true,
-  fps: 60,
-  area: 0.75,
-  fontFamily: 'sans-serif',
-  fontSize: 25,
-  fontWeight: 'bold',
-  opacity: 1.0,
-  padding: 4,
-  strokeWidth: 1.25,
-  strokeColor: 0x000000,
-  speed: 1.0,
-  duration: 4,
-  overflow: 'drop',
-  maxVisible: 0,
-  maxCache: 500,
-  preCacheCount: 50,
-  smoothing: true,
-  willChange: true,
-  useTextShadow: true,
-}
 
 export class CanvasEngine implements DanmakuEngine {
   #destroyed = false
@@ -47,6 +27,7 @@ export class CanvasEngine implements DanmakuEngine {
   #lastTs = 0
   #cancelPreCache: (() => void) | null = null
   #adapter: DanmakuOptions['adapter']
+  #streamLoader: StreamLoader | null = null
 
   constructor(options: DanmakuOptions) {
     if (!(options.container instanceof HTMLElement)) {
@@ -56,7 +37,7 @@ export class CanvasEngine implements DanmakuEngine {
       throw new TypeError('adapter is required')
     }
 
-    this.#config = { ...DEFAULTS, ...options } as ResolvedConfig
+    this.#config = { ...SHARED_DEFAULTS, ...options } as ResolvedConfig
     this.#adapter = options.adapter
 
     this.#renderer = new CanvasRenderer(options.container)
@@ -66,6 +47,16 @@ export class CanvasEngine implements DanmakuEngine {
     this.#pool = new ObjectPool()
     this.#cache = new BitmapCache(this.#config.maxCache)
     this.#scheduler = new Scheduler()
+
+    if (options.dataSource) {
+      this.#streamLoader = new StreamLoader(
+        options.dataSource,
+        this.#config.preBuffer,
+        this.#config.leadTime,
+        this.#config.seekThreshold,
+        options.onError,
+      )
+    }
 
     this.#resizeTracks()
     this.#loop = new RafLoop(this.#config.fps, this.#tick)
@@ -89,6 +80,9 @@ export class CanvasEngine implements DanmakuEngine {
     // Clear caches
     this.#cache.clearAll()
 
+    // Reset stream loader state (explicit load replaces streaming data)
+    this.#streamLoader?.reset()
+
     // Load into scheduler
     this.#scheduler.load(items)
 
@@ -98,6 +92,22 @@ export class CanvasEngine implements DanmakuEngine {
 
     // Start pre-caching from current position
     this.#schedulePreCache()
+  }
+
+  send(item: DanmakuItem): void {
+    if (this.#destroyed || !this.#config.enabled) return
+
+    const pos = this.#adapter.position
+    const W = this.#renderer.width
+    const H = this.#renderer.height
+    if (W === 0 || H === 0) return
+
+    const scrollSpeed = (W / 8) * this.#config.speed
+    const th = this.#config.fontSize + this.#config.padding * 2 + 4
+
+    // Override time to current position so the danmaku reflects "now"
+    const sent: DanmakuItem = { ...item, time: pos }
+    this.#emit(sent, pos, scrollSpeed, th, W, H, true)
   }
 
   clear(): void {
@@ -124,6 +134,7 @@ export class CanvasEngine implements DanmakuEngine {
     this.#destroyed = true
     this.#loop.stop()
     this.#cancelPreCache?.()
+    this.#streamLoader?.destroy()
     this.#pool.releaseAll(this.#visible)
     this.#visible = []
     this.#cache.clearAll()
@@ -259,7 +270,7 @@ export class CanvasEngine implements DanmakuEngine {
 
     // Detect seek (>200ms jump forward or backward)
     const posJump = Math.abs(pos - this.#lastPos)
-    if (this.#lastPos >= 0 && posJump > 0.2) {
+    if (this.#lastPos >= 0 && posJump > this.#config.seekThreshold) {
       // Clear all visible danmaku — they belong to the old position
       for (let i = 0; i < this.#visible.length; i++) {
         const v = this.#visible[i]!
@@ -270,6 +281,9 @@ export class CanvasEngine implements DanmakuEngine {
       }
       this.#visible = []
       this.#renderer.clear()
+
+      // Notify stream loader of seek
+      this.#streamLoader?.reset()
     }
     this.#lastPos = pos
 
@@ -335,13 +349,16 @@ export class CanvasEngine implements DanmakuEngine {
 
     // Pre-cache upcoming bitmaps
     this.#schedulePreCache()
+
+    // Streaming: check coverage and fetch more if needed
+    this.#streamLoader?.probe(pos, this.#scheduler)
   }
 
   // ==================================================================
   // Internal: emit a single danmaku item
   // ==================================================================
 
-  #emit(item: DanmakuItem, currentTime: number, scrollSpeed: number, th: number, W: number, H: number): void {
+  #emit(item: DanmakuItem, currentTime: number, scrollSpeed: number, th: number, W: number, H: number, force?: boolean): void {
     const mode = item.mode ?? DanmakuMode.Scroll
     const text = item.text ?? ''
     if (!text) return
@@ -355,8 +372,8 @@ export class CanvasEngine implements DanmakuEngine {
     const w = tw + cfg.padding * 2
     const h = fs
 
-    // Max visible check
-    if (cfg.maxVisible > 0 && this.#visible.length >= cfg.maxVisible) {
+    // Max visible check (skipped when force)
+    if (!force && cfg.maxVisible > 0 && this.#visible.length >= cfg.maxVisible) {
       if (cfg.overflow === 'drop') return
     }
 
@@ -366,28 +383,35 @@ export class CanvasEngine implements DanmakuEngine {
     if (mode === DanmakuMode.Scroll) {
       trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
         trackResult = { track, y: (track + 0.5) * th }
       }
     } else if (mode === DanmakuMode.Top) {
       trackResult = this.#tracks.acquireTop(currentTime, cfg.duration)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.topTrackCount) | 0
         trackResult = { track, y: (track + 0.5) * th }
       }
     } else if (mode === DanmakuMode.Bottom) {
       trackResult = this.#tracks.acquireBottom(currentTime, cfg.duration)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.bottomTrackCount) | 0
         trackResult = { track, y: H * cfg.area - (track + 0.5) * th }
       }
     } else {
       // Unknown mode → treat as scroll
       trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
-      if (!trackResult) return
+      if (!trackResult) {
+        if (force) {
+          const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
+          trackResult = { track, y: (track + 0.5) * th }
+        } else {
+          return
+        }
+      }
     }
 
     // Get bitmap

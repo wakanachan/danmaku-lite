@@ -3,33 +3,15 @@ import type { VisibleDanmaku, ResolvedConfig } from '../../types/internal'
 import { DanmakuMode } from '../../types'
 import { DOMRenderer, buildTextShadow, buildDomFont } from './renderer'
 import { DOMPool } from './pool'
-import { TrackManager } from '../canvas/track-manager'
+import { TrackManager } from '../../core/track-manager'
 import { RafLoop } from '../../core/raf-loop'
 import { Scheduler } from '../../core/scheduler'
+import { SHARED_DEFAULTS } from '../../core/defaults'
+import { StreamLoader } from '../../core/stream-loader'
 import { toCss } from '../../utils/color'
 import { clamp } from '../../utils/math'
+import { measureTextWidth } from '../../utils/text-measure'
 
-const DEFAULTS: Omit<ResolvedConfig, never> = {
-  enabled: true,
-  fps: 60,
-  area: 0.75,
-  fontFamily: 'sans-serif',
-  fontSize: 25,
-  fontWeight: 'bold',
-  opacity: 1.0,
-  padding: 4,
-  strokeWidth: 1.25,
-  strokeColor: 0x000000,
-  speed: 1.0,
-  duration: 4,
-  overflow: 'drop',
-  maxVisible: 0,
-  maxCache: 0, // not used by DOM
-  preCacheCount: 0, // not used by DOM
-  smoothing: true, // not used by DOM
-  willChange: true,
-  useTextShadow: true,
-}
 
 /**
  * DOM-based danmaku engine.
@@ -49,6 +31,7 @@ export class DOMEngine implements DanmakuEngine {
   #visible: VisibleDanmaku[] = []
   #lastTs = 0
   #adapter: DanmakuOptions['adapter']
+  #streamLoader: StreamLoader | null = null
 
   constructor(options: DanmakuOptions) {
     if (!(options.container instanceof HTMLElement)) {
@@ -58,13 +41,23 @@ export class DOMEngine implements DanmakuEngine {
       throw new TypeError('adapter is required')
     }
 
-    this.#config = { ...DEFAULTS, ...options } as ResolvedConfig
+    this.#config = { ...SHARED_DEFAULTS, ...options } as ResolvedConfig
     this.#adapter = options.adapter
 
     this.#renderer = new DOMRenderer(options.container)
     this.#tracks = new TrackManager()
     this.#pool = new DOMPool()
     this.#scheduler = new Scheduler()
+
+    if (options.dataSource) {
+      this.#streamLoader = new StreamLoader(
+        options.dataSource,
+        this.#config.preBuffer,
+        this.#config.leadTime,
+        this.#config.seekThreshold,
+        options.onError,
+      )
+    }
 
     this.#resizeTracks()
     this.#loop = new RafLoop(this.#config.fps, this.#tick)
@@ -82,7 +75,27 @@ export class DOMEngine implements DanmakuEngine {
     if (this.#destroyed) return
     this.#pool.releaseAll(this.#visible.map(v => v.el!).filter(Boolean))
     this.#visible = []
+
+    // Reset stream loader state (explicit load replaces streaming data)
+    this.#streamLoader?.reset()
+
     this.#scheduler.load(items)
+  }
+
+  send(item: DanmakuItem): void {
+    if (this.#destroyed || !this.#config.enabled) return
+
+    const pos = this.#adapter.position
+    const W = this.#renderer.width
+    const H = this.#renderer.height
+    if (W === 0 || H === 0) return
+
+    const scrollSpeed = (W / 8) * this.#config.speed
+    const th = this.#config.fontSize + this.#config.padding * 2 + 4
+
+    // Override time to current position so the danmaku reflects "now"
+    const sent: DanmakuItem = { ...item, time: pos }
+    this.#emit(sent, pos, scrollSpeed, th, W, H, true)
   }
 
   clear(): void {
@@ -103,6 +116,7 @@ export class DOMEngine implements DanmakuEngine {
     if (this.#destroyed) return
     this.#destroyed = true
     this.#loop.stop()
+    this.#streamLoader?.destroy()
     this.#pool.releaseAll(this.#visible.map(v => v.el!).filter(Boolean))
     this.#visible = []
     this.#renderer.destroy()
@@ -169,23 +183,6 @@ export class DOMEngine implements DanmakuEngine {
   }
 
   // ==================================================================
-  // Internal: build DOM style object for current config
-  // ==================================================================
-
-  #buildStyle(fontSize: number): string {
-    const cfg = this.#config
-    const font = buildDomFont(cfg.fontFamily, fontSize, cfg.fontWeight)
-    const fillColor = toCss(0xffffff) // Will be overridden per-item
-    const textShadow = cfg.useTextShadow
-      ? buildTextShadow(cfg.strokeWidth, toCss(cfg.strokeColor))
-      : 'none'
-    const willChange = cfg.willChange ? 'transform' : 'auto'
-
-    // Return a JSON-encodable style key for caching
-    return `${font}|${textShadow}|${willChange}`
-  }
-
-  // ==================================================================
   // Internal: RAF tick
   // ==================================================================
 
@@ -206,7 +203,7 @@ export class DOMEngine implements DanmakuEngine {
 
     // Detect seek (>200ms jump)
     const posJump = Math.abs(pos - this.#lastPos)
-    if (this.#lastPos >= 0 && posJump > 0.2) {
+    if (this.#lastPos >= 0 && posJump > this.#config.seekThreshold) {
       for (let i = 0; i < this.#visible.length; i++) {
         const v = this.#visible[i]!
         if (v.el) { this.#renderer.removeElement(v.el); this.#pool.release(v.el) }
@@ -215,6 +212,9 @@ export class DOMEngine implements DanmakuEngine {
         else if (v.mode === DanmakuMode.Bottom) this.#tracks.releaseBottom(v.track)
       }
       this.#visible = []
+
+      // Notify stream loader of seek
+      this.#streamLoader?.reset()
     }
     this.#lastPos = pos
 
@@ -259,13 +259,16 @@ export class DOMEngine implements DanmakuEngine {
         this.#renderer.positionElement(v.el, v.x, v.y, v.mode, v.h)
       }
     }
+
+    // Streaming: check coverage and fetch more if needed
+    this.#streamLoader?.probe(pos, this.#scheduler)
   }
 
   // ==================================================================
   // Internal: emit
   // ==================================================================
 
-  #emit(item: DanmakuItem, currentTime: number, scrollSpeed: number, th: number, W: number, H: number): void {
+  #emit(item: DanmakuItem, currentTime: number, scrollSpeed: number, th: number, W: number, H: number, force?: boolean): void {
     const mode = item.mode ?? DanmakuMode.Scroll
     const text = item.text ?? ''
     if (!text) return
@@ -273,12 +276,13 @@ export class DOMEngine implements DanmakuEngine {
     const fs = item.font_size ?? this.#config.fontSize
     const cfg = this.#config
 
-    // Approximate width (we don't pre-measure in DOM)
-    const w = text.length * fs * 0.6 + cfg.padding * 2
+    // Measure actual text width using a shared hidden canvas
+    const tw = measureTextWidth(text, cfg.fontFamily, fs, cfg.fontWeight)
+    const w = tw + cfg.padding * 2
     const h = fs
 
-    // Max visible check
-    if (cfg.maxVisible > 0 && this.#visible.length >= cfg.maxVisible) {
+    // Max visible check (skipped when force)
+    if (!force && cfg.maxVisible > 0 && this.#visible.length >= cfg.maxVisible) {
       if (cfg.overflow === 'drop') return
     }
 
@@ -288,27 +292,34 @@ export class DOMEngine implements DanmakuEngine {
     if (mode === DanmakuMode.Scroll) {
       trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
         trackResult = { track, y: (track + 0.5) * th }
       }
     } else if (mode === DanmakuMode.Top) {
       trackResult = this.#tracks.acquireTop(currentTime, cfg.duration)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.topTrackCount) | 0
         trackResult = { track, y: (track + 0.5) * th }
       }
     } else if (mode === DanmakuMode.Bottom) {
       trackResult = this.#tracks.acquireBottom(currentTime, cfg.duration)
       if (!trackResult) {
-        if (cfg.overflow === 'drop') return
+        if (cfg.overflow === 'drop' && !force) return
         const track = (Math.random() * this.#tracks.bottomTrackCount) | 0
         trackResult = { track, y: H * cfg.area - (track + 0.5) * th }
       }
     } else {
       trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
-      if (!trackResult) return
+      if (!trackResult) {
+        if (force) {
+          const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
+          trackResult = { track, y: (track + 0.5) * th }
+        } else {
+          return
+        }
+      }
     }
 
     // Create DOM element

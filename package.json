@@ -1,6 +1,6 @@
 {
   "name": "danmaku-lite",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Framework-agnostic, player-agnostic danmaku (bullet chat) rendering engine with dual Canvas/DOM backends",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas.d.ts",
+      "default": "./dist/canvas.js"
+    },
+    "./dom": {
+      "types": "./dist/dom.d.ts",
+      "default": "./dist/dom.js"
     }
   },
   "module": "./dist/index.js",

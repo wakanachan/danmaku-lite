@@ -92,4 +92,63 @@ export class Scheduler {
   preCacheInfo(): { pool: readonly DanmakuItem[]; cursor: number } {
     return { pool: this.pool, cursor: this.cursor }
   }
+
+  /**
+   * Merge new items into the sorted pool using a merge-join.
+   * Items with duplicate IDs (already in pool) are skipped.
+   * Used by StreamLoader for incremental streaming loads.
+   */
+  add(items: readonly DanmakuItem[]): void {
+    if (items.length === 0) return
+
+    const existingIds = new Set<number | string>()
+    for (let i = 0; i < this.pool.length; i++) {
+      existingIds.add(this.pool[i]!.id)
+    }
+
+    const newItems = [...items]
+      .filter(item => !existingIds.has(item.id))
+      .sort((a, b) => a.time - b.time)
+
+    if (newItems.length === 0) return
+
+    // Merge-join: pool and newItems are both sorted by time
+    const merged: DanmakuItem[] = []
+    let pi = 0, ni = 0
+    while (pi < this.pool.length && ni < newItems.length) {
+      if (this.pool[pi]!.time <= newItems[ni]!.time) {
+        merged.push(this.pool[pi]!)
+        pi++
+      } else {
+        merged.push(newItems[ni]!)
+        ni++
+      }
+    }
+    while (pi < this.pool.length) merged.push(this.pool[pi++]!)
+    while (ni < newItems.length) merged.push(newItems[ni++]!)
+
+    this.pool = merged
+  }
+
+  /**
+   * Evict pool items whose time is before `timeSec` (in seconds).
+   * Adjusts cursor so it remains valid after eviction.
+   */
+  evictBefore(timeSec: number): void {
+    if (this.pool.length === 0) return
+
+    // Use a tiny epsilon so items with time === timeSec are NOT evicted.
+    // binarySearch returns first index where value > target, so
+    // target = timeSec*1000 - 0.1 means we keep items at exactly timeSec.
+    const cutoff = binarySearch(
+      this.pool,
+      timeSec * 1000 - 0.1,
+      (item) => (item.time ?? 0) * 1000,
+    )
+
+    if (cutoff === 0) return
+
+    this.pool.splice(0, cutoff)
+    this.cursor = Math.max(0, this.cursor - cutoff)
+  }
 }

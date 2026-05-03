@@ -1,0 +1,26 @@
+import type { ResolvedConfig } from '../types/internal'
+
+export const SHARED_DEFAULTS = {
+  enabled: true,
+  fps: 60,
+  area: 0.75,
+  fontFamily: 'sans-serif',
+  fontSize: 25,
+  fontWeight: 'bold',
+  opacity: 1.0,
+  padding: 4,
+  strokeWidth: 1.25,
+  strokeColor: 0x000000,
+  speed: 1.0,
+  seekThreshold: 0.2,
+  duration: 4,
+  overflow: 'drop' as const,
+  maxVisible: 0,
+  maxCache: 500,
+  preCacheCount: 50,
+  smoothing: true,
+  willChange: true,
+  useTextShadow: true,
+  preBuffer: 60,
+  leadTime: 0,
+} satisfies Omit<ResolvedConfig, never>

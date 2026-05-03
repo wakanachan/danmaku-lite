@@ -10,6 +10,9 @@ import { DOMEngine } from './dom'
  * @returns A DanmakuEngine instance
  */
 export function createEngine(type: EngineType, options: DanmakuOptions): DanmakuEngine {
+  if (!(options.container instanceof HTMLElement)) {
+    throw new TypeError('container must be an HTMLElement')
+  }
   if (options.container instanceof HTMLVideoElement) {
     throw new TypeError(
       'container cannot be a <video> element. Video uses a native rendering surface ' +

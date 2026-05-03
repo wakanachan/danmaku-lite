@@ -7,12 +7,14 @@ Framework-agnostic, player-agnostic danmaku (bullet chat / 弹幕) rendering eng
 - **Zero dependencies** — pure TypeScript, no framework required
 - **Player-agnostic** — works with HTML5 `<video>`, libmpv, YouTube, custom players, WebRTC streams
 - **Dual engine** — Canvas 2D (high performance, 500+ concurrent danmaku) or DOM (simple, CSS-based)
-- **21 configurable parameters** — font family, stroke, speed, frame rate, area, overflow, and more
+- **24 configurable parameters** — font family, stroke, speed, frame rate, area, overflow, and more
 - **HiDPI** — automatic devicePixelRatio scaling on Canvas
 - **O(1) track allocation** — free-track stacks with random-rotation fallback for even distribution
 - **Gap-based track reuse** — tracks free up based on horizontal spacing, allowing dense danmaku
 - **ImageBitmap GPU cache** — pre-rendered bitmaps with LRU eviction + alive-set leak guard
 - **Seek-safe** — automatic cursor rewind on backward seeks, visible cleanup on position jumps
+- **Streaming loading** — engine-managed incremental fetch via user-provided `DataSourceAdapter`; supports VOD, live, and local playback
+- **send() API** — temporarily display a single danmaku on send success; bypasses visibility caps
 - **Tree-shakeable** — ESM with TypeScript declarations, minified build included
 
 ## Install
@@ -22,6 +24,8 @@ pnpm add danmaku-lite
 ```
 
 ## Quick Start
+
+### Static Loading (VOD / local playback)
 
 ```typescript
 import { createEngine } from 'danmaku-lite'
@@ -45,6 +49,54 @@ engine.load([
 ])
 
 window.addEventListener('resize', () => engine.resize())
+```
+
+### Streaming Loading (VOD / live streaming)
+
+```typescript
+import { createEngine } from 'danmaku-lite'
+
+const engine = createEngine('canvas', {
+  container: document.getElementById('overlay')!,
+  adapter: {
+    get position() { return video.currentTime },
+    get paused() { return video.paused },
+  },
+  // User-provided data source — engine decides when to fetch
+  dataSource: {
+    async fetch(start, end) {
+      const res = await fetch(`/api/danmaku?start=${start}&end=${end}`)
+      return res.json()
+    },
+  },
+  preBuffer: 60,   // keep 60s of danmaku ahead of playhead
+  leadTime: 30,    // evict items older than 30s behind playhead
+})
+
+// Engine fetches automatically — no need to call load().
+// Call load() to seed initial data or replace content:
+engine.load([{ id: 0, text: 'seeded!', time: 0, mode: 1, color: 0xffffff }])
+```
+
+### Send Danmaku (on send success)
+
+```typescript
+// User clicks send → your app POSTs to backend → on success:
+engine.send({
+  id: `user-${Date.now()}`,
+  text: 'Hello from user!',
+  time: video.currentTime,  // overridden to current position
+  mode: 1,                   // 1=Scroll, 5=Top, 6=Bottom
+  color: 0xff8800,
+})
+
+// The danmaku appears immediately, regardless of maxVisible / overflow settings.
+// It follows the normal lifecycle (scrolls off-screen or expires) and is cleaned up.
+```
+
+### Cleanup
+
+```typescript
 engine.destroy()
 ```
 
@@ -84,6 +136,11 @@ Throws `TypeError` if `container` is a `<video>` element — wrap the video in a
 | `smoothing` | `boolean` | `true` | Canvas — `imageSmoothingEnabled` |
 | `willChange` | `boolean` | `true` | DOM — `will-change: transform` hint |
 | `useTextShadow` | `boolean` | `true` | DOM — `text-shadow` outline simulation |
+| `seekThreshold` | `number` | `0.2` | Both — minimum position jump (s) that triggers seek clear |
+| `onError` | `(error: Error) => void` | `undefined` | Both — called on streaming fetch errors |
+| `dataSource` | `DataSourceAdapter` | `undefined` | Both — enables streaming mode |
+| `preBuffer` | `number` | `60` | Both — seconds ahead to pre-fetch (streaming mode) |
+| `leadTime` | `number` | `0` | Both — seconds behind to retain; older items evicted (0 = keep all) |
 
 ### `PlayerAdapter`
 
@@ -99,10 +156,11 @@ interface PlayerAdapter {
 
 | Method | Description |
 |--------|-------------|
-| `load(items)` | Load/replace danmaku list (sorted by time) |
+| `load(items)` | Load/replace danmaku list (sorted by time). In streaming mode, resets the stream loader. |
 | `clear()` | Remove all visible danmaku and clear caches |
 | `resize()` | Recalculate dimensions — call on container resize or fullscreen change |
 | `destroy()` | Destroy engine, free all resources (idempotent) |
+| `send(item)` | Temporarily display a single danmaku at the current playback position. Bypasses `maxVisible` and `overflow: drop`. Use after a successful send to show the user's message immediately. |
 | `isDestroyed` | Whether `destroy()` has been called |
 
 Runtime setters — all trigger necessary side effects (cache invalidation, track recalculation, bitmap re-render):
@@ -122,6 +180,42 @@ interface DanmakuItem {
 }
 ```
 
+### `DataSourceAdapter`
+
+User-provided adapter for streaming danmaku data. When provided via `dataSource` option, the engine manages data fetching automatically.
+
+```typescript
+interface DataSourceAdapter {
+  /**
+   * Fetch danmaku items for a given time range.
+   *
+   * @param start - Start time in seconds (inclusive)
+   * @param end   - End time in seconds (exclusive). May be Infinity
+   *                for live streaming where the end is unknown.
+   * @returns Items in this range. Need not be sorted. May be empty.
+   */
+  fetch(start: number, end: number): Promise<DanmakuItem[]>
+}
+```
+
+**Scenarios:**
+
+| Scenario | Adapter behavior | Config |
+|----------|-----------------|--------|
+| **Local player** | `fetch(0, duration)` called once; all data loaded upfront | `preBuffer: 0` |
+| **Online VOD** | `fetch()` called in segments as playback progresses | `preBuffer: 60`, `leadTime: 0` |
+| **Live streaming** | `fetch(lastPos, Infinity)` called continuously; returns current items | `preBuffer: 30`, `leadTime: 60` |
+
+**How it works:**
+1. Engine calls `probe(position)` every frame
+2. If the current playback position + `preBuffer` extends beyond already-fetched ranges, a new `fetch()` is triggered
+3. Fetched items are merged into the scheduler via `scheduler.add()`
+4. On seek, in-flight fetches are cancelled and ranges are reset
+5. If `leadTime > 0`, items older than `position - leadTime` are evicted from memory
+
+**Streaming + `load()` coexistence:**
+Calling `load()` while streaming is active resets the stream loader (clears range cache, cancels in-flight requests) and replaces the scheduler pool with the explicit items. The stream loader resumes on the next tick from the current position.
+
 ## Canvas vs DOM
 
 | | Canvas | DOM |
@@ -133,13 +227,34 @@ interface DanmakuItem {
 | Memory | Lower (shared canvas buffer) | Higher (per-danmaku DOM node) |
 | Bitmap cache | LRU with eviction | N/A |
 
+## Tree-shakeable Entry Points
+
+Import only the engine you need for a smaller bundle:
+
+```typescript
+// Full (both engines) — 26.0 KB min
+import { createEngine } from 'danmaku-lite'
+
+// Canvas only — 18.4 KB min (no DOM code)
+import { createEngine } from 'danmaku-lite/canvas'
+
+// DOM only — 15.4 KB min (no Canvas / OffscreenCanvas code)
+import { createEngine } from 'danmaku-lite/dom'
+```
+
+All three entry points export the same public API. The per-engine entries omit the unused backend entirely.
+
 ## Build Output
 
 ```
 dist/
-  index.js       48.6 KB  ESM (unminified + sourcemap)
-  index.min.js   22.5 KB  ESM (minified + sourcemap)
-  index.d.ts      5.2 KB  TypeScript declarations
+  index.js       58.0 KB  ESM full (unminified + sourcemap)
+  index.min.js   26.0 KB  ESM full (minified + sourcemap)
+  canvas.js      41.3 KB  ESM canvas-only (unminified + sourcemap)
+  canvas.min.js  18.4 KB  ESM canvas-only (minified + sourcemap)
+  dom.js         34.2 KB  ESM dom-only (unminified + sourcemap)
+  dom.min.js     15.4 KB  ESM dom-only (minified + sourcemap)
+  index.d.ts      6.8 KB  TypeScript declarations
 ```
 
 No CJS — this package is browser-only. ESM is supported by all modern bundlers (Vite, webpack 5, esbuild, Rollup, Parcel).

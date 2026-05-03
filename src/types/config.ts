@@ -1,4 +1,5 @@
 import type { PlayerAdapter } from './player-adapter'
+import type { DataSourceAdapter } from './data-source'
 
 export type EngineType = 'canvas' | 'dom'
 
@@ -38,6 +39,8 @@ export interface DanmakuOptions {
   strokeColor?: number
 
   // ---- Scroll behavior ----
+  /** Minimum position jump (seconds) that triggers seek handling. Default: 0.2 */
+  seekThreshold?: number
   /** Playback speed multiplier. Affects scroll velocity. Default: 1.0 */
   speed?: number
   /** Fixed danmaku (mode 5/6) display duration in seconds. Default: 4 */
@@ -62,4 +65,25 @@ export interface DanmakuOptions {
   willChange?: boolean
   /** Use text-shadow multi-directional offset to simulate stroke. Disable for plain text. Default: true */
   useTextShadow?: boolean
+  /** Called when a streaming fetch error occurs. If not set, errors are silently retried. */
+  onError?: (error: Error) => void
+
+  // ---- Data source (streaming) ----
+  /**
+   * Adapter for streaming danmaku data from a backend.
+   * When provided, the engine manages data fetching automatically.
+   * When omitted, the consumer must call load() explicitly.
+   */
+  dataSource?: DataSourceAdapter
+  /**
+   * Seconds of danmaku data to pre-buffer ahead of playback position.
+   * Only used when dataSource is set. Default: 60
+   */
+  preBuffer?: number
+  /**
+   * Seconds of danmaku data to retain behind playback position.
+   * Data older than (position - leadTime) is evicted from memory.
+   * Default: 0 (keep all). Set to >0 for memory-constrained long sessions (e.g. live streaming).
+   */
+  leadTime?: number
 }

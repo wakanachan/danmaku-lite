@@ -1,9 +1,11 @@
 import { defineConfig } from 'tsup'
 
+const entries = ['src/index.ts', 'src/canvas.ts', 'src/dom.ts']
+
 export default defineConfig([
   // Unminified
   {
-    entry: ['src/index.ts'],
+    entry: entries,
     format: ['esm'],
     dts: true,
     sourcemap: true,
@@ -16,7 +18,7 @@ export default defineConfig([
   },
   // Minified
   {
-    entry: ['src/index.ts'],
+    entry: entries,
     format: ['esm'],
     dts: false,
     sourcemap: true,

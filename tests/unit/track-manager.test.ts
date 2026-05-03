@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { TrackManager } from '../../src/engine/canvas/track-manager'
+import { TrackManager } from '../../src/core/track-manager'
 
 describe('TrackManager', () => {
   it('resize calculates track count from area and height', () => {

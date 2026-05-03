@@ -41,4 +41,12 @@ export interface DanmakuEngine {
   setSmoothing(v: boolean): void
   setWillChange(v: boolean): void
   setUseTextShadow(v: boolean): void
+
+  /**
+   * Immediately display a single danmaku at the current playback position.
+   * Bypasses the scheduler — the item is rendered regardless of its time field.
+   * Always shows (skips maxVisible and overflow checks).
+   * Use for user-sent messages or real-time notifications on send success.
+   */
+  send(item: DanmakuItem): void
 }

@@ -1,3 +1,4 @@
+import '../polyfills/requestIdleCallback'
 import type { DanmakuItem } from '../types'
 
 /**

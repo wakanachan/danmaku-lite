@@ -40,6 +40,7 @@ export interface ResolvedConfig {
   strokeWidth: number
   strokeColor: number
   speed: number
+  seekThreshold: number
   duration: number
   overflow: 'drop' | 'none'
   maxVisible: number
@@ -48,4 +49,6 @@ export interface ResolvedConfig {
   smoothing: boolean
   willChange: boolean
   useTextShadow: boolean
+  preBuffer: number
+  leadTime: number
 }
