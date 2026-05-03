@@ -91,7 +91,8 @@ export class DOMEngine implements DanmakuEngine {
     if (W === 0 || H === 0) return
 
     const scrollSpeed = (W / 8) * this.#config.speed
-    const th = this.#config.fontSize + this.#config.padding * 2 + 4
+    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
+    const th = this.#config.fontSize + this.#config.padding * 2 + gap
 
     // Override time to current position so the danmaku reflects "now"
     const sent: DanmakuItem = { ...item, time: pos }
@@ -156,11 +157,19 @@ export class DOMEngine implements DanmakuEngine {
   }
 
   setFontFamily(v: string): void { this.#config.fontFamily = v }
-  setFontSize(v: number): void { this.#config.fontSize = clamp(v, 8, 128) }
+  setFontSize(v: number): void {
+    if (this.#destroyed) return
+    this.#config.fontSize = clamp(v, 8, 128)
+    this.#resizeTracks()
+  }
   setFontWeight(v: string): void { this.#config.fontWeight = v }
   setStrokeWidth(v: number): void { this.#config.strokeWidth = Math.max(0, v) }
   setStrokeColor(v: number): void { this.#config.strokeColor = v & 0xffffff }
-  setPadding(v: number): void { this.#config.padding = Math.max(0, v) }
+  setPadding(v: number): void {
+    if (this.#destroyed) return
+    this.#config.padding = Math.max(0, v)
+    this.#resizeTracks()
+  }
   setDuration(v: number): void { this.#config.duration = Math.max(0.5, v) }
   setOverflow(v: OverflowStrategy): void { this.#config.overflow = v }
   setMaxVisible(v: number): void { this.#config.maxVisible = Math.max(0, v) }
@@ -198,8 +207,8 @@ export class DOMEngine implements DanmakuEngine {
       return
     }
 
-    // Pause → freeze
-    if (paused) { this.#lastPos = -1; return }
+    // Pause → freeze (keep last frame, preserve #lastPos for seek detection)
+    if (paused) return
 
     // Detect seek (>200ms jump)
     const posJump = Math.abs(pos - this.#lastPos)
@@ -222,7 +231,8 @@ export class DOMEngine implements DanmakuEngine {
     this.#lastTs = ts
 
     const scrollSpeed = (W / 8) * this.#config.speed
-    const th = this.#config.fontSize + this.#config.padding * 2 + 4
+    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
+    const th = this.#config.fontSize + this.#config.padding * 2 + gap
 
     // --- Emit ---
     const posMs = pos * 1000
@@ -325,7 +335,7 @@ export class DOMEngine implements DanmakuEngine {
     // Create DOM element
     const font = buildDomFont(cfg.fontFamily, fs, cfg.fontWeight)
     const textShadow = cfg.useTextShadow
-      ? buildTextShadow(cfg.strokeWidth, toCss(cfg.strokeColor))
+      ? buildTextShadow(cfg.strokeWidth * 0.7, toCss(cfg.strokeColor))
       : 'none'
     const willChange = cfg.willChange ? 'transform' : 'auto'
 
@@ -374,7 +384,8 @@ export class DOMEngine implements DanmakuEngine {
     const H = this.#renderer.height
     if (H === 0) return
     const cfg = this.#config
-    const th = cfg.fontSize + cfg.padding * 2 + 4
+    const gap = Math.max(2, Math.ceil(cfg.fontSize * 0.2))
+    const th = cfg.fontSize + cfg.padding * 2 + gap
     this.#tracks.resize(H, cfg.area, th)
   }
 }

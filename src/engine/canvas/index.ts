@@ -103,7 +103,8 @@ export class CanvasEngine implements DanmakuEngine {
     if (W === 0 || H === 0) return
 
     const scrollSpeed = (W / 8) * this.#config.speed
-    const th = this.#config.fontSize + this.#config.padding * 2 + 4
+    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
+    const th = this.#config.fontSize + this.#config.padding * 2 + gap
 
     // Override time to current position so the danmaku reflects "now"
     const sent: DanmakuItem = { ...item, time: pos }
@@ -185,6 +186,7 @@ export class CanvasEngine implements DanmakuEngine {
     this.#config.fontSize = clamp(v, 8, 128)
     this.#cache.invalidateTextCache()
     this.#cache.clearBitmaps()
+    this.#resizeTracks()
   }
 
   setFontWeight(v: string): void {
@@ -210,6 +212,7 @@ export class CanvasEngine implements DanmakuEngine {
     if (this.#destroyed) return
     this.#config.padding = Math.max(0, v)
     this.#cache.clearBitmaps()
+    this.#resizeTracks()
   }
 
   setDuration(v: number): void {
@@ -292,7 +295,8 @@ export class CanvasEngine implements DanmakuEngine {
     this.#lastTs = ts
 
     const scrollSpeed = (W / 8) * this.#config.speed
-    const th = this.#config.fontSize + this.#config.padding * 2 + 4 // track height = fontSize + padding*2 + gap
+    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
+    const th = this.#config.fontSize + this.#config.padding * 2 + gap // track height = fontSize + padding*2 + gap
 
     // --- Emit new danmaku ---
     const posMs = pos * 1000
@@ -477,7 +481,8 @@ export class CanvasEngine implements DanmakuEngine {
     const H = this.#renderer.height
     if (H === 0) return
     const cfg = this.#config
-    const th = cfg.fontSize + cfg.padding * 2 + 4
+    const gap = Math.max(2, Math.ceil(cfg.fontSize * 0.2))
+    const th = cfg.fontSize + cfg.padding * 2 + gap
     this.#tracks.resize(H, cfg.area, th)
   }
 }

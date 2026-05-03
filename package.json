@@ -1,10 +1,11 @@
 {
   "name": "danmaku-lite",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Framework-agnostic, player-agnostic danmaku (bullet chat) rendering engine with dual Canvas/DOM backends",
   "type": "module",
   "license": "MIT",
-  "author": "",
+  "author": "wakanachan",
+  "repository": "https://github.com/wakanachan/danmaku-lite",
   "keywords": [
     "danmaku",
     "danmu",
