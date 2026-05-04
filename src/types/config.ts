@@ -41,6 +41,8 @@ export interface DanmakuOptions {
   // ---- Scroll behavior ----
   /** Minimum position jump (seconds) that triggers seek handling. Default: 0.2 */
   seekThreshold?: number
+  /** Gap between consecutive scroll danmaku, in pixels at reference width 1920. Scaled proportionally to container width. Default: 96 */
+  scrollGap?: number
   /** Playback speed multiplier. Affects scroll velocity. Default: 1.0 */
   speed?: number
   /** Fixed danmaku (mode 5/6) display duration in seconds. Default: 4 */

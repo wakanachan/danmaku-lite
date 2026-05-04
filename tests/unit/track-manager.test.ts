@@ -9,21 +9,21 @@ describe('TrackManager', () => {
     // Verifying by allocating scroll tracks exhaustively
     const results: number[] = []
     for (let i = 0; i < 18; i++) {
-      const r = tm.acquireScroll(0, 100, 100, 1280)
+      const r = tm.acquireScroll(0, 100, 100, 1280, 96)
       expect(r).not.toBeNull()
       results.push(r!.track)
     }
     // All 18 tracks allocated
     expect(new Set(results).size).toBe(18)
     // No more available
-    expect(tm.acquireScroll(0, 100, 100, 1280)).toBeNull()
+    expect(tm.acquireScroll(0, 100, 100, 1280, 96)).toBeNull()
   })
 
   it('track y positions are distinct', () => {
     const tm = new TrackManager()
     tm.resize(720, 0.75, 30)
-    const r0 = tm.acquireScroll(0, 100, 100, 1280)
-    const r1 = tm.acquireScroll(0, 100, 100, 1280)
+    const r0 = tm.acquireScroll(0, 100, 100, 1280, 96)
+    const r1 = tm.acquireScroll(0, 100, 100, 1280, 96)
     // Both tracks allocated successfully at different y positions
     expect(r0!.y).not.toBe(r1!.y)
   })
@@ -32,11 +32,11 @@ describe('TrackManager', () => {
     const tm = new TrackManager()
     tm.resize(720, 0.75, 30)
 
-    const r = tm.acquireScroll(0, 100, 100, 1280)
+    const r = tm.acquireScroll(0, 100, 100, 1280, 96)
     expect(r).not.toBeNull()
 
     tm.releaseScroll(r!.track)
-    const r2 = tm.acquireScroll(100, 100, 100, 1280)
+    const r2 = tm.acquireScroll(100, 100, 100, 1280, 96)
     expect(r2!.track).toBe(r!.track)
   })
 
@@ -67,11 +67,11 @@ describe('TrackManager', () => {
     // Allocate all tracks at t=0
     const tracks: number[] = []
     for (let i = 0; i < 18; i++) {
-      const r = tm.acquireScroll(0, 100, 100, 1280)
+      const r = tm.acquireScroll(0, 100, 100, 1280, 96)
       tracks.push(r!.track)
     }
 
     // At t=0.1, not enough time for any track to free up
-    expect(tm.acquireScroll(0.1, 100, 100, 1280)).toBeNull()
+    expect(tm.acquireScroll(0.1, 100, 100, 1280, 96)).toBeNull()
   })
 })

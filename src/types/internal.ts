@@ -39,6 +39,7 @@ export interface ResolvedConfig {
   padding: number
   strokeWidth: number
   strokeColor: number
+  scrollGap: number
   speed: number
   seekThreshold: number
   duration: number

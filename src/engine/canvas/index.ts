@@ -1,500 +1,75 @@
-import type {DanmakuEngine, DanmakuItem, DanmakuOptions, OverflowStrategy} from '../../types'
-import {DanmakuMode} from '../../types'
-import type {ResolvedConfig, VisibleDanmaku} from '../../types/internal'
-import {CanvasRenderer} from './renderer'
-import {TrackManager} from '../../core/track-manager'
-import {ObjectPool} from './pool'
-import {BitmapCache} from './bitmap-cache'
-import {RafLoop} from '../../core/raf-loop'
-import {Scheduler} from '../../core/scheduler'
-import {schedulePreCache} from '../../core/pre-cache'
-import {SHARED_DEFAULTS} from '../../core/defaults'
-import {StreamLoader} from '../../core/stream-loader'
-import {clamp} from '../../utils/math'
+import type { DanmakuItem, DanmakuOptions } from '../../types'
+import type { VisibleDanmaku } from '../../types/internal'
+import { DanmakuEngineBase } from '../base'
+import { CanvasRenderer } from './renderer'
+import { ObjectPool } from './pool'
+import { BitmapCache } from './bitmap-cache'
+import { schedulePreCache } from '../../core/pre-cache'
 
-export class CanvasEngine implements DanmakuEngine {
-  #destroyed = false
-  #config: ResolvedConfig
-
+export class CanvasEngine extends DanmakuEngineBase {
   #renderer: CanvasRenderer
-  #tracks: TrackManager
-  #pool: ObjectPool
+  #pool = new ObjectPool()
   #cache: BitmapCache
-  #loop: RafLoop
-  #scheduler: Scheduler
-
-  #visible: VisibleDanmaku[] = []
-  #lastTs = 0
   #cancelPreCache: (() => void) | null = null
-  #adapter: DanmakuOptions['adapter']
-  #streamLoader: StreamLoader | null = null
 
   constructor(options: DanmakuOptions) {
-    if (!(options.container instanceof HTMLElement)) {
-      throw new TypeError('container must be an HTMLElement')
-    }
-    if (!options.adapter) {
-      throw new TypeError('adapter is required')
-    }
-
-    this.#config = { ...SHARED_DEFAULTS, ...options } as ResolvedConfig
-    this.#adapter = options.adapter
-
+    super(options)
     this.#renderer = new CanvasRenderer(options.container)
-    this.#renderer.setSmoothing(this.#config.smoothing)
-
-    this.#tracks = new TrackManager()
-    this.#pool = new ObjectPool()
-    this.#cache = new BitmapCache(this.#config.maxCache)
-    this.#scheduler = new Scheduler()
-
-    if (options.dataSource) {
-      this.#streamLoader = new StreamLoader(
-        options.dataSource,
-        this.#config.preBuffer,
-        this.#config.leadTime,
-        this.#config.seekThreshold,
-        options.onError,
-      )
-    }
-
-    this.#resizeTracks()
-    this.#loop = new RafLoop(this.#config.fps, this.#tick)
+    this.#renderer.setSmoothing(this.cfg.smoothing)
+    this.#cache = new BitmapCache(this.cfg.maxCache)
+    this.initTracks()
   }
 
   // ==================================================================
-  // Lifecycle
+  // Abstract hook implementations
   // ==================================================================
 
-  get isDestroyed(): boolean {
-    return this.#destroyed
+  protected get rendererWidth(): number {
+    return this.#renderer.width
   }
-
-  load(items: readonly DanmakuItem[]): void {
-    if (this.#destroyed) return
-
-    // Release all visible danmaku
-    this.#pool.releaseAll(this.#visible)
-    this.#visible = []
-
-    // Clear caches
-    this.#cache.clearAll()
-
-    // Reset stream loader state (explicit load replaces streaming data)
-    this.#streamLoader?.reset()
-
-    // Load into scheduler
-    this.#scheduler.load(items)
-
-    // Schedule pre-caching
-    this.#cancelPreCache?.()
-    this.#cancelPreCache = null
-
-    // Start pre-caching from current position
-    this.#schedulePreCache()
+  protected get rendererHeight(): number {
+    return this.#renderer.height
   }
-
-  send(item: DanmakuItem): void {
-    if (this.#destroyed || !this.#config.enabled) return
-
-    const pos = this.#adapter.position
-    const W = this.#renderer.width
-    const H = this.#renderer.height
-    if (W === 0 || H === 0) return
-
-    const scrollSpeed = (W / 8) * this.#config.speed
-    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
-    const th = this.#config.fontSize + this.#config.padding * 2 + gap
-
-    // Override time to current position so the danmaku reflects "now"
-    const sent: DanmakuItem = { ...item, time: pos }
-    this.#emit(sent, pos, scrollSpeed, th, W, H, true)
-  }
-
-  clear(): void {
-    if (this.#destroyed) return
-    this.#pool.releaseAll(this.#visible)
-    this.#visible = []
-    this.#scheduler.clear()
-    this.#cache.clearAll()
+  protected clearRenderer(): void {
     this.#renderer.clear()
   }
-
-  resize(): void {
-    if (this.#destroyed) return
+  protected destroyRenderer(): void {
+    this.#renderer.destroy()
+  }
+  protected updateDimensions(): boolean {
     const ok = this.#renderer.updateDimensions()
     if (ok) {
       this.#cache.setDpr(this.#renderer.devicePixelRatio)
       this.#cache.invalidateTextCache()
-      this.#resizeTracks()
     }
+    return ok
   }
-
-  destroy(): void {
-    if (this.#destroyed) return
-    this.#destroyed = true
-    this.#loop.stop()
-    this.#cancelPreCache?.()
-    this.#streamLoader?.destroy()
-    this.#pool.releaseAll(this.#visible)
-    this.#visible = []
-    this.#cache.clearAll()
-    this.#renderer.destroy()
+  protected measureTextWidth(text: string, family: string, size: number, weight: string): number {
+    return this.#cache.measure(text, family, size, weight, this.#renderer.ctx)
   }
-
-  // ==================================================================
-  // Runtime setters
-  // ==================================================================
-
-  setEnabled(v: boolean): void {
-    if (this.#destroyed) return
-    this.#config.enabled = v
-    if (!v) this.#renderer.clear()
-  }
-
-  setFps(v: number): void {
-    if (this.#destroyed) return
-    this.#config.fps = clamp(v, 1, 120)
-    this.#loop.setFps(this.#config.fps)
-  }
-
-  setArea(v: number): void {
-    if (this.#destroyed) return
-    this.#config.area = clamp(v, 0, 1)
-    this.#resizeTracks()
-  }
-
-  setOpacity(v: number): void {
-    if (this.#destroyed) return
-    this.#config.opacity = clamp(v, 0, 1)
-  }
-
-  setSpeed(v: number): void {
-    if (this.#destroyed) return
-    this.#config.speed = Math.max(0.1, v)
-  }
-
-  setFontFamily(v: string): void {
-    if (this.#destroyed) return
-    this.#config.fontFamily = v
-    this.#cache.invalidateTextCache()
-    this.#cache.clearBitmaps()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setFontSize(v: number): void {
-    if (this.#destroyed) return
-    this.#config.fontSize = clamp(v, 8, 128)
-    this.#cache.invalidateTextCache()
-    this.#cache.clearBitmaps()
-    this.#resizeTracks()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setFontWeight(v: string): void {
-    if (this.#destroyed) return
-    this.#config.fontWeight = v
-    this.#cache.invalidateTextCache()
-    this.#cache.clearBitmaps()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setStrokeWidth(v: number): void {
-    if (this.#destroyed) return
-    this.#config.strokeWidth = Math.max(0, v)
-    this.#cache.clearBitmaps()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setStrokeColor(v: number): void {
-    if (this.#destroyed) return
-    this.#config.strokeColor = v & 0xffffff
-    this.#cache.clearBitmaps()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setPadding(v: number): void {
-    if (this.#destroyed) return
-    this.#config.padding = Math.max(0, v)
-    this.#cache.clearBitmaps()
-    this.#resizeTracks()
-    this.#refreshVisibleBitmaps()
-  }
-
-  setDuration(v: number): void {
-    if (this.#destroyed) return
-    this.#config.duration = Math.max(0.5, v)
-    for (let i = 0; i < this.#visible.length; i++) {
-      const d = this.#visible[i]!
-      if (d.mode !== DanmakuMode.Scroll) {
-        d.duration = this.#config.duration
-      }
-    }
-  }
-
-  setOverflow(v: OverflowStrategy): void {
-    if (this.#destroyed) return
-    this.#config.overflow = v
-  }
-
-  setMaxVisible(v: number): void {
-    if (this.#destroyed) return
-    this.#config.maxVisible = Math.max(0, v)
-  }
-
-  setMaxCache(v: number): void {
-    if (this.#destroyed) return
-    this.#config.maxCache = Math.max(10, v)
-    this.#cache.setMaxCache(this.#config.maxCache)
-  }
-
-  setPreCacheCount(v: number): void {
-    if (this.#destroyed) return
-    this.#config.preCacheCount = Math.max(0, v)
-  }
-
-  setSmoothing(v: boolean): void {
-    if (this.#destroyed) return
-    this.#config.smoothing = v
-    this.#renderer.setSmoothing(v)
-  }
-
-  // DOM-only setters — no-ops for canvas engine
-  setWillChange(_v: boolean): void { /* no-op */ }
-  setUseTextShadow(_v: boolean): void { /* no-op */ }
-
-  // ==================================================================
-  // Internal: RAF tick
-  // ==================================================================
-
-  #lastPos = -1
-
-  #tick = (ts: number): void => {
-    const pos = this.#adapter.position
-    const paused = this.#adapter.paused
-    const W = this.#renderer.width
-    const H = this.#renderer.height
-
-    if (!this.#config.enabled || W === 0) {
-      this.#renderer.clear()
-      return
-    }
-
-    // Pause → freeze (keep last frame)
-    if (paused) return
-
-    // Detect seek (>200ms jump forward or backward)
-    const posJump = Math.abs(pos - this.#lastPos)
-    if (this.#lastPos >= 0 && posJump > this.#config.seekThreshold) {
-      // Clear all visible danmaku — they belong to the old position
-      for (let i = 0; i < this.#visible.length; i++) {
-        const v = this.#visible[i]!
-        if (v.mode === DanmakuMode.Scroll) this.#tracks.releaseScroll(v.track)
-        else if (v.mode === DanmakuMode.Top) this.#tracks.releaseTop(v.track)
-        else if (v.mode === DanmakuMode.Bottom) this.#tracks.releaseBottom(v.track)
-        this.#pool.release(v)
-      }
-      this.#visible = []
-      this.#renderer.clear()
-
-      // Notify stream loader of seek
-      this.#streamLoader?.reset()
-    }
-    this.#lastPos = pos
-
-    // Real delta time, clamped to avoid huge jumps on seek/lag
-    const dt = this.#lastTs ? Math.min((ts - this.#lastTs) / 1000, 0.05) : 0
-    this.#lastTs = ts
-
-    const scrollSpeed = (W / 8) * this.#config.speed
-    const gap = Math.max(2, Math.ceil(this.#config.fontSize * 0.2))
-    const th = this.#config.fontSize + this.#config.padding * 2 + gap // track height = fontSize + padding*2 + gap
-
-    // --- Emit new danmaku ---
-    const posMs = pos * 1000
-    const batch = this.#scheduler.emitBatch(posMs)
-    for (let i = 0; i < batch.length; i++) {
-      this.#emit(batch[i]!, pos, scrollSpeed, th, W, H)
-    }
-
-    // --- Update & compact ---
-    const now = performance.now() / 1000
-    const onRemove = (v: VisibleDanmaku) => {
-      // Return track
-      if (v.mode === DanmakuMode.Scroll) {
-        this.#tracks.releaseScroll(v.track)
-      } else if (v.mode === DanmakuMode.Top) {
-        this.#tracks.releaseTop(v.track)
-      } else if (v.mode === DanmakuMode.Bottom) {
-        this.#tracks.releaseBottom(v.track)
-      }
-      this.#pool.release(v)
-    }
-
-    this.#visible.length = this.#scheduler.compact(this.#visible, now, dt, scrollSpeed, onRemove)
-
-    // --- Draw ---
-    this.#renderer.clear()
-    this.#renderer.setGlobalAlpha(this.#config.opacity)
-
-    const dpr = this.#renderer.devicePixelRatio
-    const pad = this.#config.padding
-
-    for (let i = 0; i < this.#visible.length; i++) {
-      const v = this.#visible[i]!
-      const bmp = v.bmp
-      if (!bmp) continue
-
-      // Guard against LRU-evicted (closed) bitmaps still referenced by v.bmp
-      if (!this.#cache.isAlive(bmp)) { v.bmp = undefined; continue }
-
-      const dx = v.x | 0
-      const dy = v.y | 0
-      const sw = bmp.width
-      const sh = bmp.height
-      const dw = sw / dpr
-      const dh = sh / dpr
-
-      const ctx = this.#renderer.ctx
-      if (v.mode === DanmakuMode.Scroll) {
-        ctx.drawImage(bmp, 0, 0, sw, sh, dx - pad, (dy - dh / 2) | 0, dw, dh)
-      } else {
-        ctx.drawImage(bmp, 0, 0, sw, sh, (dx - dw / 2) | 0, (dy - dh / 2) | 0, dw, dh)
-      }
-    }
-
-    // Pre-cache upcoming bitmaps
-    this.#schedulePreCache()
-
-    // Streaming: check coverage and fetch more if needed
-    this.#streamLoader?.probe(pos, this.#scheduler)
-  }
-
-  // ==================================================================
-  // Internal: emit a single danmaku item
-  // ==================================================================
-
-  #emit(item: DanmakuItem, currentTime: number, scrollSpeed: number, th: number, W: number, H: number, force?: boolean): void {
-    const mode = item.mode ?? DanmakuMode.Scroll
-    const text = item.text ?? ''
-    if (!text) return
-    const color = item.color ?? 0xffffff
-    const fs = item.font_size ?? this.#config.fontSize
-    const cfg = this.#config
-    const ctx = this.#renderer.ctx
-
-    // Measure text
-    const tw = this.#cache.measure(text, cfg.fontFamily, fs, cfg.fontWeight, ctx)
-    const w = tw + cfg.padding * 2
-    const h = fs
-
-    // Max visible check (skipped when force)
-    if (!force && cfg.maxVisible > 0 && this.#visible.length >= cfg.maxVisible) {
-      if (cfg.overflow === 'drop') return
-    }
-
-    // Allocate track
-    let trackResult: { track: number; y: number } | null = null
-
-    if (mode === DanmakuMode.Scroll) {
-      trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
-      if (!trackResult) {
-        if (cfg.overflow === 'drop' && !force) return
-        const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
-        trackResult = { track, y: (track + 0.5) * th }
-      }
-    } else if (mode === DanmakuMode.Top) {
-      trackResult = this.#tracks.acquireTop(currentTime, cfg.duration)
-      if (!trackResult) {
-        if (cfg.overflow === 'drop' && !force) return
-        const track = (Math.random() * this.#tracks.topTrackCount) | 0
-        trackResult = { track, y: (track + 0.5) * th }
-      }
-    } else if (mode === DanmakuMode.Bottom) {
-      trackResult = this.#tracks.acquireBottom(currentTime, cfg.duration)
-      if (!trackResult) {
-        if (cfg.overflow === 'drop' && !force) return
-        const track = (Math.random() * this.#tracks.bottomTrackCount) | 0
-        trackResult = { track, y: H * cfg.area - (track + 0.5) * th }
-      }
-    } else {
-      // Unknown mode → treat as scroll
-      trackResult = this.#tracks.acquireScroll(currentTime, w, scrollSpeed, W)
-      if (!trackResult) {
-        if (force) {
-          const track = (Math.random() * this.#tracks.scrollTrackCount) | 0
-          trackResult = { track, y: (track + 0.5) * th }
-        } else {
-          return
-        }
-      }
-    }
-
-    // Get bitmap
-    const bmp = this.#cache.getBitmap(
-      text, fs, color, cfg.strokeWidth, cfg.strokeColor,
+  protected renderDanmaku(v: VisibleDanmaku): void {
+    const cfg = this.cfg
+    v.bmp = this.#cache.getBitmap(
+      v.text, v.fontSize, v.color, cfg.strokeWidth, cfg.strokeColor,
       cfg.fontFamily, cfg.fontWeight,
       this.#renderer.devicePixelRatio, cfg.padding,
     )
-
-    // Create visible danmaku
-    const v = this.#pool.acquire()
-    v.id = item.id
-    v.text = text
-    v.mode = mode
-    v.color = color
-    v.fontSize = fs
-    v.x = mode === DanmakuMode.Scroll ? W : W / 2
-    v.y = trackResult.y
-    v.track = trackResult.track
-    v.w = w
-    v.h = h
-    v.born = performance.now() / 1000
-    v.duration = cfg.duration
-    v.bmp = bmp
-
-    this.#visible.push(v)
   }
-
-  // ==================================================================
-  // Internal: pre-cache scheduling
-  // ==================================================================
-
-  #schedulePreCache(): void {
-    if (this.#cancelPreCache || this.#destroyed) return
-    const { pool, cursor } = this.#scheduler.preCacheInfo()
-    const cfg = this.#config
-
-    this.#cancelPreCache = schedulePreCache(
-      pool, cursor, cfg.preCacheCount,
-      (item) => {
-        const text = item.text ?? ''
-        const fs = item.font_size ?? cfg.fontSize
-        const color = item.color ?? 0xffffff
-        // Measure
-        this.#cache.measure(text, cfg.fontFamily, fs, cfg.fontWeight, this.#renderer.ctx)
-        // Pre-render bitmap if not cached
-        try {
-          this.#cache.getBitmap(
-            text, fs, color, cfg.strokeWidth, cfg.strokeColor,
-            cfg.fontFamily, cfg.fontWeight,
-            this.#renderer.devicePixelRatio, cfg.padding,
-          )
-        } catch { /* bitmap creation may fail for empty text */ }
-      },
-    )
+  protected releaseVisibleResource(v: VisibleDanmaku): void {
+    this.#pool.release(v)
   }
-
-  // ==================================================================
-  // Internal: refresh visible bitmaps after config change
-  // ==================================================================
-
-  #refreshVisibleBitmaps(): void {
+  protected releaseAllVisibleResources(): void {
+    this.#pool.releaseAll(this.visible)
+    this.#cache.clearAll()
+    this.#renderer.clear()
+  }
+  protected refreshVisibleDanmaku(): void {
     const ctx = this.#renderer.ctx
-    const cfg = this.#config
+    const cfg = this.cfg
     const dpr = this.#renderer.devicePixelRatio
-    for (let i = 0; i < this.#visible.length; i++) {
-      const v = this.#visible[i]!
+    const visible = this.visible
+    for (let i = 0; i < visible.length; i++) {
+      const v = visible[i]!
       const fs = v.fontSize
       const tw = this.#cache.measure(v.text, cfg.fontFamily, fs, cfg.fontWeight, ctx)
       v.w = tw + cfg.padding * 2
@@ -505,17 +80,142 @@ export class CanvasEngine implements DanmakuEngine {
       )
     }
   }
+  protected drawFrame(W: number, _H: number): void {
+    this.#renderer.clear()
+    this.#renderer.setGlobalAlpha(this.cfg.opacity)
+
+    const dpr = this.#renderer.devicePixelRatio
+    const pad = this.cfg.padding
+    const visible = this.visible
+
+    for (let i = 0; i < visible.length; i++) {
+      const v = visible[i]!
+      const bmp = v.bmp
+      if (!bmp) continue
+
+      if (!this.#cache.isAlive(bmp)) { v.bmp = undefined; continue }
+
+      const dx = v.x | 0
+      const dy = v.y | 0
+      const sw = bmp.width
+      const sh = bmp.height
+      const dw = sw / dpr
+      const dh = sh / dpr
+
+      const ctx = this.#renderer.ctx
+      if (v.mode === 1 /* Scroll */) {
+        ctx.drawImage(bmp, 0, 0, sw, sh, dx - pad, (dy - dh / 2) | 0, dw, dh)
+      } else {
+        ctx.drawImage(bmp, 0, 0, sw, sh, (dx - dw / 2) | 0, (dy - dh / 2) | 0, dw, dh)
+      }
+    }
+  }
+  protected override acquireVisibleDanmaku(): VisibleDanmaku {
+    return this.#pool.acquire()
+  }
+  protected override onAfterLoad(): void {
+    this.#cancelPreCache?.()
+    this.#cancelPreCache = null
+    this.#schedulePreCache()
+  }
+  protected override onAfterTick(): void {
+    this.#schedulePreCache()
+  }
 
   // ==================================================================
-  // Internal: resize tracks
+  // Override setters — add canvas-specific cache invalidation + refresh
   // ==================================================================
 
-  #resizeTracks(): void {
-    const H = this.#renderer.height
-    if (H === 0) return
-    const cfg = this.#config
-    const gap = Math.max(2, Math.ceil(cfg.fontSize * 0.2))
-    const th = cfg.fontSize + cfg.padding * 2 + gap
-    this.#tracks.resize(H, cfg.area, th)
+  setEnabled(v: boolean): void {
+    super.setEnabled(v)
+    if (!v) this.#renderer.clear()
+  }
+
+  setFontFamily(v: string): void {
+    super.setFontFamily(v)
+    this.#cache.invalidateTextCache()
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setFontSize(v: number): void {
+    super.setFontSize(v)
+    this.#cache.invalidateTextCache()
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setFontWeight(v: string): void {
+    super.setFontWeight(v)
+    this.#cache.invalidateTextCache()
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setStrokeWidth(v: number): void {
+    super.setStrokeWidth(v)
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setStrokeColor(v: number): void {
+    super.setStrokeColor(v)
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setPadding(v: number): void {
+    super.setPadding(v)
+    this.#cache.clearBitmaps()
+    this.refreshVisibleDanmaku()
+  }
+
+  setScrollGap(v: number) {
+    super.setScrollGap(v);
+    this.refreshVisibleDanmaku()
+  }
+
+  setMaxCache(v: number): void {
+    if (this.isDestroyed) return
+    this.cfg.maxCache = Math.max(10, v)
+    this.#cache.setMaxCache(this.cfg.maxCache)
+  }
+
+  setPreCacheCount(v: number): void {
+    if (this.isDestroyed) return
+    this.cfg.preCacheCount = Math.max(0, v)
+  }
+
+  setSmoothing(v: boolean): void {
+    if (this.isDestroyed) return
+    this.cfg.smoothing = v
+    this.#renderer.setSmoothing(v)
+  }
+
+  // ==================================================================
+  // Internal: pre-cache scheduling
+  // ==================================================================
+
+  #schedulePreCache(): void {
+    if (this.#cancelPreCache || this.isDestroyed) return
+    const { pool, cursor } = this.getPreCacheInfo()
+    const cfg = this.cfg
+
+    this.#cancelPreCache = schedulePreCache(
+      pool, cursor, cfg.preCacheCount,
+      (item: DanmakuItem) => {
+        const text = item.text ?? ''
+        const fs = item.font_size ?? cfg.fontSize
+        const color = item.color ?? 0xffffff
+        this.#cache.measure(text, cfg.fontFamily, fs, cfg.fontWeight, this.#renderer.ctx)
+        try {
+          this.#cache.getBitmap(
+            text, fs, color, cfg.strokeWidth, cfg.strokeColor,
+            cfg.fontFamily, cfg.fontWeight,
+            this.#renderer.devicePixelRatio, cfg.padding,
+          )
+        } catch { /* bitmap creation may fail for empty text */ }
+      },
+    )
   }
 }

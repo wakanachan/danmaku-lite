@@ -11,6 +11,7 @@ export const SHARED_DEFAULTS = {
   padding: 4,
   strokeWidth: 1.25,
   strokeColor: 0x000000,
+  scrollGap: 96,
   speed: 1.0,
   seekThreshold: 0.2,
   duration: 4,

@@ -33,6 +33,7 @@ export interface DanmakuEngine {
   setStrokeWidth(v: number): void
   setStrokeColor(v: number): void
   setPadding(v: number): void
+  setScrollGap(v: number): void
   setDuration(v: number): void
   setOverflow(v: OverflowStrategy): void
   setMaxVisible(v: number): void

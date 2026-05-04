@@ -1,4 +1,10 @@
-# danmaku-lite
+# Danmaku Lite
+
+[![npm version](https://img.shields.io/npm/v/danmaku-lite?color=58a6ff)](https://www.npmjs.com/package/danmaku-lite)
+[![minzip size](https://img.shields.io/bundlephobia/minzip/danmaku-lite)](https://bundlephobia.com/package/danmaku-lite)
+[![license](https://img.shields.io/npm/l/danmaku-lite)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript)](https://www.typescriptlang.org/)
+[![ESM only](https://img.shields.io/badge/ESM-only-f7df1e?logo=javascript)](https://nodejs.org/api/esm.html)
 
 Framework-agnostic, player-agnostic danmaku (bullet chat / 弹幕) rendering engine with dual Canvas/DOM backends. Zero dependencies. ESM only.
 
@@ -7,23 +13,28 @@ Framework-agnostic, player-agnostic danmaku (bullet chat / 弹幕) rendering eng
 - **Zero dependencies** — pure TypeScript, no framework required
 - **Player-agnostic** — works with HTML5 `<video>`, libmpv, YouTube, custom players, WebRTC streams
 - **Dual engine** — Canvas 2D (high performance, 500+ concurrent danmaku) or DOM (simple, CSS-based)
-- **24 configurable parameters** — font family, stroke, speed, frame rate, area, overflow, and more
+- **25 configurable parameters** — font, stroke, speed, scroll gap, frame rate, area, overflow, and more
 - **HiDPI** — automatic devicePixelRatio scaling on Canvas
 - **O(1) track allocation** — free-track stacks with random-rotation fallback for even distribution
-- **Gap-based track reuse** — tracks free up based on horizontal spacing, allowing dense danmaku
+- **Configurable scroll gap** — reference-width-based gap between scroll danmaku, scaled proportionally to container
 - **ImageBitmap GPU cache** — pre-rendered bitmaps with LRU eviction + alive-set leak guard
 - **Seek-safe** — automatic cursor rewind on backward seeks, visible cleanup on position jumps
 - **Streaming loading** — engine-managed incremental fetch via user-provided `DataSourceAdapter`; supports VOD, live, and local playback
 - **send() API** — temporarily display a single danmaku on send success; bypasses visibility caps
 - **Tree-shakeable** — ESM with TypeScript declarations, minified build included
 
-## Install
+## Quick Start
+
+### Install
 
 ```bash
+#npm
+npm install danmaku-lite
+# pnpm
 pnpm add danmaku-lite
+# yarn
+yarn add danmaku-lite
 ```
-
-## Quick Start
 
 ### Static Loading (VOD / local playback)
 
@@ -125,6 +136,7 @@ Throws `TypeError` if `container` is a `<video>` element — wrap the video in a
 | `fontWeight` | `string` | `'bold'` | Both |
 | `opacity` | `number` | `1.0` | Both (0–1) |
 | `padding` | `number` | `4` | Canvas — text bitmap padding (px) |
+| `scrollGap` | `number` | `96` | Both — scroll danmaku gap at reference width 1920px, scaled proportionally |
 | `strokeWidth` | `number` | `1.25` | Both — outline width (px) |
 | `strokeColor` | `number` | `0x000000` | Both — outline color (0xRRGGBB) |
 | `speed` | `number` | `1.0` | Both — scroll speed multiplier |
@@ -165,7 +177,7 @@ interface PlayerAdapter {
 
 Runtime setters — all trigger necessary side effects (cache invalidation, track recalculation, bitmap re-render):
 
-`setEnabled` `setFps` `setArea` `setOpacity` `setSpeed` `setFontFamily` `setFontSize` `setFontWeight` `setStrokeWidth` `setStrokeColor` `setPadding` `setDuration` `setOverflow` `setMaxVisible` `setMaxCache` `setPreCacheCount` `setSmoothing` `setWillChange` `setUseTextShadow`
+`setEnabled` `setFps` `setArea` `setOpacity` `setSpeed` `setFontFamily` `setFontSize` `setFontWeight` `setStrokeWidth` `setStrokeColor` `setPadding` `setScrollGap` `setDuration` `setOverflow` `setMaxVisible` `setMaxCache` `setPreCacheCount` `setSmoothing` `setWillChange` `setUseTextShadow`
 
 ### `DanmakuItem`
 
@@ -228,17 +240,20 @@ Calling `load()` while streaming is active resets the stream loader (clears rang
 | Bitmap cache | LRU with eviction | N/A |
 
 ## Tree-shakeable Entry Points
+![npm package minimized gzipped size](https://img.shields.io/bundlejs/size/danmaku-lite?label=full)
+![npm package minimized gzipped size](https://img.shields.io/bundlejs/size/danmaku-lite%2Fcanvas?label=canvas)
+![npm package minimized gzipped size](https://img.shields.io/bundlejs/size/danmaku-lite%2Fdom?label=dom)
 
 Import only the engine you need for a smaller bundle:
 
 ```typescript
-// Full (both engines) — 26.0 KB min
+// Full (both engines)
 import { createEngine } from 'danmaku-lite'
 
-// Canvas only — 18.4 KB min (no DOM code)
+// Canvas only
 import { createEngine } from 'danmaku-lite/canvas'
 
-// DOM only — 15.4 KB min (no Canvas / OffscreenCanvas code)
+// DOM only
 import { createEngine } from 'danmaku-lite/dom'
 ```
 
@@ -248,13 +263,13 @@ All three entry points export the same public API. The per-engine entries omit t
 
 ```
 dist/
-  index.js       58.0 KB  ESM full (unminified + sourcemap)
-  index.min.js   26.0 KB  ESM full (minified + sourcemap)
-  canvas.js      41.3 KB  ESM canvas-only (unminified + sourcemap)
-  canvas.min.js  18.4 KB  ESM canvas-only (minified + sourcemap)
-  dom.js         34.2 KB  ESM dom-only (unminified + sourcemap)
-  dom.min.js     15.4 KB  ESM dom-only (minified + sourcemap)
-  index.d.ts      6.8 KB  TypeScript declarations
+  index.js       ESM full (unminified + sourcemap)
+  index.min.js   ESM full (minified + sourcemap)
+  canvas.js      ESM canvas-only (unminified + sourcemap)
+  canvas.min.js  ESM canvas-only (minified + sourcemap)
+  dom.js         ESM dom-only (unminified + sourcemap)
+  dom.min.js     ESM dom-only (minified + sourcemap)
+  index.d.ts     TypeScript declarations
 ```
 
 No CJS — this package is browser-only. ESM is supported by all modern bundlers (Vite, webpack 5, esbuild, Rollup, Parcel).

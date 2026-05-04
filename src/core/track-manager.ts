@@ -49,13 +49,13 @@ export class TrackManager {
 
   // ---- Scroll track allocation (mode 1) ----
 
-  acquireScroll(currentTime: number, danmakuWidth: number, speed: number, _containerWidth: number): { track: number; y: number } | null {
+  acquireScroll(currentTime: number, danmakuWidth: number, speed: number, containerWidth: number, scrollGap: number): { track: number; y: number } | null {
     // O(1): pop from free stack first, defer unavailable tracks instead of discarding
     const deferred: number[] = []
     while (this.scrollFree.length > 0) {
       const t = this.scrollFree.pop()!
       if (this.scrollExit[t]! <= currentTime) {
-        this.scrollExit[t] = currentTime + (danmakuWidth * 1.2) / speed
+        this.scrollExit[t] = currentTime + (danmakuWidth + scrollGap * containerWidth / 1920) / speed
         // Push deferred tracks back so they can be tried next time
         for (const d of deferred) this.scrollFree.push(d)
         return { track: t, y: this.scrollY(t) }
@@ -70,7 +70,7 @@ export class TrackManager {
     for (let j = 0; j < this.scrollCount; j++) {
       const i = (offset + j) % this.scrollCount
       if (this.scrollExit[i]! <= currentTime) {
-        this.scrollExit[i] = currentTime + (danmakuWidth * 1.2) / speed
+        this.scrollExit[i] = currentTime + (danmakuWidth + scrollGap * containerWidth / 1920) / speed
         // Remove track from free stack so it doesn't accumulate duplicates
         const idx = this.scrollFree.indexOf(i)
         if (idx !== -1) this.scrollFree.splice(idx, 1)
