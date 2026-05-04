@@ -264,7 +264,8 @@ All three entry points export the same public API. The per-engine entries omit t
 ```bash
 git clone https://github.com/wakanachan/danmaku-lite.git
 cd danmaku-lite
-npx serve -l 3030 # http://localhost:3030/demo/
+pnpm install
+pnpm build && pnpm dlx serve -l 3030 # http://localhost:3030/demo/
 ```
 
 ## Build Output
