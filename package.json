@@ -1,6 +1,6 @@
 {
   "name": "danmaku-lite",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Framework-agnostic, player-agnostic danmaku (bullet chat) rendering engine with dual Canvas/DOM backends",
   "type": "module",
   "license": "MIT",

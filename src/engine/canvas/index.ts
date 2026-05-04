@@ -179,6 +179,7 @@ export class CanvasEngine implements DanmakuEngine {
     this.#config.fontFamily = v
     this.#cache.invalidateTextCache()
     this.#cache.clearBitmaps()
+    this.#refreshVisibleBitmaps()
   }
 
   setFontSize(v: number): void {
@@ -187,6 +188,7 @@ export class CanvasEngine implements DanmakuEngine {
     this.#cache.invalidateTextCache()
     this.#cache.clearBitmaps()
     this.#resizeTracks()
+    this.#refreshVisibleBitmaps()
   }
 
   setFontWeight(v: string): void {
@@ -194,18 +196,21 @@ export class CanvasEngine implements DanmakuEngine {
     this.#config.fontWeight = v
     this.#cache.invalidateTextCache()
     this.#cache.clearBitmaps()
+    this.#refreshVisibleBitmaps()
   }
 
   setStrokeWidth(v: number): void {
     if (this.#destroyed) return
     this.#config.strokeWidth = Math.max(0, v)
     this.#cache.clearBitmaps()
+    this.#refreshVisibleBitmaps()
   }
 
   setStrokeColor(v: number): void {
     if (this.#destroyed) return
     this.#config.strokeColor = v & 0xffffff
     this.#cache.clearBitmaps()
+    this.#refreshVisibleBitmaps()
   }
 
   setPadding(v: number): void {
@@ -213,11 +218,18 @@ export class CanvasEngine implements DanmakuEngine {
     this.#config.padding = Math.max(0, v)
     this.#cache.clearBitmaps()
     this.#resizeTracks()
+    this.#refreshVisibleBitmaps()
   }
 
   setDuration(v: number): void {
     if (this.#destroyed) return
     this.#config.duration = Math.max(0.5, v)
+    for (let i = 0; i < this.#visible.length; i++) {
+      const d = this.#visible[i]!
+      if (d.mode !== DanmakuMode.Scroll) {
+        d.duration = this.#config.duration
+      }
+    }
   }
 
   setOverflow(v: OverflowStrategy): void {
@@ -471,6 +483,27 @@ export class CanvasEngine implements DanmakuEngine {
         } catch { /* bitmap creation may fail for empty text */ }
       },
     )
+  }
+
+  // ==================================================================
+  // Internal: refresh visible bitmaps after config change
+  // ==================================================================
+
+  #refreshVisibleBitmaps(): void {
+    const ctx = this.#renderer.ctx
+    const cfg = this.#config
+    const dpr = this.#renderer.devicePixelRatio
+    for (let i = 0; i < this.#visible.length; i++) {
+      const v = this.#visible[i]!
+      const fs = v.fontSize
+      const tw = this.#cache.measure(v.text, cfg.fontFamily, fs, cfg.fontWeight, ctx)
+      v.w = tw + cfg.padding * 2
+      v.h = fs
+      v.bmp = this.#cache.getBitmap(
+        v.text, fs, v.color, cfg.strokeWidth, cfg.strokeColor,
+        cfg.fontFamily, cfg.fontWeight, dpr, cfg.padding,
+      )
+    }
   }
 
   // ==================================================================

@@ -149,6 +149,10 @@ export class DOMEngine implements DanmakuEngine {
     if (this.#destroyed) return
     this.#config.opacity = clamp(v, 0, 1)
     this.#renderer.root.style.opacity = String(this.#config.opacity)
+    for (let i = 0; i < this.#visible.length; i++) {
+      const d = this.#visible[i]!
+      if (d.el) d.el.style.opacity = String(this.#config.opacity)
+    }
   }
 
   setSpeed(v: number): void {
@@ -156,21 +160,43 @@ export class DOMEngine implements DanmakuEngine {
     this.#config.speed = Math.max(0.1, v)
   }
 
-  setFontFamily(v: string): void { this.#config.fontFamily = v }
+  setFontFamily(v: string): void {
+    this.#config.fontFamily = v
+    this.#refreshVisibleElements()
+  }
   setFontSize(v: number): void {
     if (this.#destroyed) return
     this.#config.fontSize = clamp(v, 8, 128)
     this.#resizeTracks()
+    this.#refreshVisibleElements()
   }
-  setFontWeight(v: string): void { this.#config.fontWeight = v }
-  setStrokeWidth(v: number): void { this.#config.strokeWidth = Math.max(0, v) }
-  setStrokeColor(v: number): void { this.#config.strokeColor = v & 0xffffff }
+  setFontWeight(v: string): void {
+    this.#config.fontWeight = v
+    this.#refreshVisibleElements()
+  }
+  setStrokeWidth(v: number): void {
+    this.#config.strokeWidth = Math.max(0, v)
+    this.#refreshVisibleElements()
+  }
+  setStrokeColor(v: number): void {
+    this.#config.strokeColor = v & 0xffffff
+    this.#refreshVisibleElements()
+  }
   setPadding(v: number): void {
     if (this.#destroyed) return
     this.#config.padding = Math.max(0, v)
     this.#resizeTracks()
+    this.#refreshVisibleElements()
   }
-  setDuration(v: number): void { this.#config.duration = Math.max(0.5, v) }
+  setDuration(v: number): void {
+    this.#config.duration = Math.max(0.5, v)
+    for (let i = 0; i < this.#visible.length; i++) {
+      const d = this.#visible[i]!
+      if (d.mode !== DanmakuMode.Scroll) {
+        d.duration = this.#config.duration
+      }
+    }
+  }
   setOverflow(v: OverflowStrategy): void { this.#config.overflow = v }
   setMaxVisible(v: number): void { this.#config.maxVisible = Math.max(0, v) }
 
@@ -184,11 +210,13 @@ export class DOMEngine implements DanmakuEngine {
   setWillChange(v: boolean): void {
     if (this.#destroyed) return
     this.#config.willChange = v
+    this.#refreshVisibleElements()
   }
 
   setUseTextShadow(v: boolean): void {
     if (this.#destroyed) return
     this.#config.useTextShadow = v
+    this.#refreshVisibleElements()
   }
 
   // ==================================================================
@@ -374,6 +402,30 @@ export class DOMEngine implements DanmakuEngine {
     }
 
     this.#visible.push(v)
+  }
+
+  // ==================================================================
+  // Internal: refresh visible elements after config change
+  // ==================================================================
+
+  #refreshVisibleElements(): void {
+    const cfg = this.#config
+    const textShadow = cfg.useTextShadow
+      ? buildTextShadow(cfg.strokeWidth * 0.7, toCss(cfg.strokeColor))
+      : 'none'
+    const willChange = cfg.willChange ? 'transform' : 'auto'
+    for (let i = 0; i < this.#visible.length; i++) {
+      const v = this.#visible[i]!
+      if (!v.el) continue
+      const fs = v.fontSize
+      v.el.style.font = buildDomFont(cfg.fontFamily, fs, cfg.fontWeight)
+      v.el.style.color = toCss(v.color)
+      v.el.style.textShadow = textShadow
+      v.el.style.willChange = willChange
+      v.el.style.opacity = String(cfg.opacity)
+      v.w = measureTextWidth(v.text, cfg.fontFamily, fs, cfg.fontWeight) + cfg.padding * 2
+      v.fontSize = cfg.fontSize
+    }
   }
 
   // ==================================================================
