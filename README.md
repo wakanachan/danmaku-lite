@@ -259,6 +259,14 @@ import { createEngine } from 'danmaku-lite/dom'
 
 All three entry points export the same public API. The per-engine entries omit the unused backend entirely.
 
+## Demo
+
+```bash
+git clone https://github.com/wakanachan/danmaku-lite.git
+cd danmaku-lite
+npx serve -l 3030 # http://localhost:3030/demo/
+```
+
 ## Build Output
 
 ```
